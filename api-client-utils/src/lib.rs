@@ -6,9 +6,9 @@ use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::time::Duration;
 
-pub mod re_exports {
-    pub use reqwest;
-}
+// pub mod re_exports {
+//     pub use reqwest;
+// }
 
 pub mod prelude {
     pub use crate::error::aliases::{

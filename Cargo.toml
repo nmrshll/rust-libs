@@ -1,7 +1,8 @@
 [workspace]
 members = [
-    "api_client_utils",
+    "api-client-utils",
 ]
+resolver="2"
 
 [workspace.dependencies]
 # async, web, db
