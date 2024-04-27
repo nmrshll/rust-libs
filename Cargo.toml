@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "api_client_utils",
+]
+
+[workspace.dependencies]
+# async, web, db
+tokio = { version="^1.36", features=["full"] }
+reqwest = { version="^0.12", features=["json"] }
+# serde, crypto, codecs
+serde = { version="^1.0", features=["derive"] }
+serde_json = "^1.0"
+# errors, logs, env, config
+anyhow = { version="^1.0", features=["backtrace"] }
+thiserror = "^1.0"
+lazy_static = "^1.4"
