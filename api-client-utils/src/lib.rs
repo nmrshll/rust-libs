@@ -1,3 +1,4 @@
+#![allow(async_fn_in_trait)]
 use self::context::{OkRespWithContext, RespContext};
 use self::error::ClientErr;
 use self::serialization_formats::{ApiFormat, JsonFormat, SerialFormat, XmlFormat};
@@ -6,9 +7,9 @@ use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::time::Duration;
 
-// pub mod re_exports {
-//     pub use reqwest;
-// }
+pub mod re_exports {
+    pub use reqwest;
+}
 
 pub mod prelude {
     pub use crate::error::aliases::{
@@ -16,7 +17,7 @@ pub mod prelude {
     };
     pub use crate::error::{ClientErr, ResultExt};
     pub use crate::serialization_formats::{ApiFormat, JsonFormat, SerialFormat};
-    pub use crate::{ApiClient, ExpectResp, JsonApiClient, ReceiveJson};
+    pub use crate::{ApiClient, JsonApiClient, ReceiveJson, ReceiveResp};
 }
 
 // Goals
@@ -119,9 +120,8 @@ pub mod serialization_formats {
     }
 }
 
-impl<T: Sized + Into<RequestBuilder>> ExpectResp<JsonFormat> for T {} // auto-implement for RequestBuilder and more
-#[allow(async_fn_in_trait)]
-pub trait ExpectResp<F: SerialFormat>: Sized + Into<RequestBuilder> {
+impl<T: Sized + ToRequestClient> ReceiveResp<JsonFormat> for T {} // auto-implement for RequestClient, RequestBuilder and more
+pub trait ReceiveResp<F: SerialFormat>: Sized + ToRequestClient {
     async fn expect_ok<Ok: DeserializeOwned, ErrResp: DeserializeOwned>(
         self,
     ) -> Result<Ok, ClientErr<ErrResp, F>> {
@@ -138,29 +138,19 @@ pub trait ExpectResp<F: SerialFormat>: Sized + Into<RequestBuilder> {
             Err(err) => err.try_into_err_resp(expect_status),
         }
     }
+
     // async fn expect_status<Ok: DeserializeOwned, ErrResp: DeserializeOwned>(
     //     self,
     //     expect_status: StatusCode,
     // ) -> Result<Ok, RequestErr<ErrResp, F>> {
-    //     match Self::partial_expect(self.into()).await {
-    //         Ok(ok) => {
-    //             // TODO check status
-    //             todo!()
-    //         }
-    //         Err(err) => {
-    //             // TODO check status
-    //             todo!()
-    //         }
-    //     }
-    //     // TODO
     // }
+
     fn partial_expect<Ok: DeserializeOwned, ErrResp: DeserializeOwned>(
         self,
     ) -> impl Future<Output = Result<OkRespWithContext<Ok>, ClientErr<ErrResp, F>>> {
         async move {
-            let request_builder: RequestBuilder = self.into();
-            let (client, if_ok_request) = request_builder.build_split();
-            let request = if_ok_request.map_err(ClientErr::BuildRequest)?;
+            let RequestClient { request, client } =
+                self.try_into().map_err(ClientErr::BuildRequest)?;
             let (method, url) = { (request.method().clone(), request.url().clone()) };
 
             let response = client
@@ -174,21 +164,6 @@ pub trait ExpectResp<F: SerialFormat>: Sized + Into<RequestBuilder> {
                 got_status: response.status(),
                 response_text: response.text().await.map_err(ClientErr::ReadRespBodyText)?,
             };
-
-            // if let Some(expected_status) = expect_status {
-            //     if got_status.is_success() && !expected_status.is_success() {
-            //         return Err(RequestErr::ExpectedErrorResponse { context });
-            //     }
-            //     // if !got_status.is_success() && expected_status.is_success() {
-            //     //     return Err(RequestErr::ExpectedSuccessResponse { context });
-            //     // }
-            //     if got_status != expected_status {
-            //         return Err(RequestErr::ExpectedStatus {
-            //             context,
-            //             expected_status,
-            //         });
-            //     }
-            // }
 
             // if err, try to deserialize error body into ErrResp type
             if !got_status.is_success() {
@@ -222,13 +197,38 @@ pub trait ExpectResp<F: SerialFormat>: Sized + Into<RequestBuilder> {
         }
     }
 }
+
+pub struct RequestClient {
+    pub request: reqwest::Request,
+    pub client: reqwest::Client,
+}
+// impl TryFrom<RequestBuilder> for RequestClient {
+//     type Error = reqwest::Error;
+//     fn try_from(builder: RequestBuilder) -> Result<Self, reqwest::Error> {
+//         builder.try_build_split()
+//     }
+// }
+pub trait ToRequestClient {
+    fn try_into(self) -> Result<RequestClient, reqwest::Error>;
+}
+impl ToRequestClient for RequestClient {
+    fn try_into(self) -> Result<RequestClient, reqwest::Error> {
+        Ok(self)
+    }
+}
+impl ToRequestClient for RequestBuilder {
+    fn try_into(self) -> Result<RequestClient, reqwest::Error> {
+        self.try_build_split()
+    }
+}
+
 pub trait ReceiveJson {
     fn recv_json<Ok: DeserializeOwned, ErrResp: DeserializeOwned>(
         self,
     ) -> impl Future<Output = Result<Ok, ClientErr<ErrResp, JsonFormat>>>;
 }
-// auto-impl ReceiveJson for all ExpectResp
-impl<T: ExpectResp<JsonFormat>> ReceiveJson for T {
+// auto-impl ReceiveJson for all ReceiveResp
+impl<T: ReceiveResp<JsonFormat>> ReceiveJson for T {
     fn recv_json<Ok: DeserializeOwned, ErrResp: DeserializeOwned>(
         self,
     ) -> impl Future<Output = Result<Ok, ClientErr<ErrResp, JsonFormat>>> {
@@ -412,12 +412,23 @@ let got_status = context.got_status;
     }
 }
 
+pub trait RequestBuilderExt {
+    fn try_build_split(self) -> Result<RequestClient, reqwest::Error>;
+}
+impl RequestBuilderExt for RequestBuilder {
+    fn try_build_split(self) -> Result<RequestClient, reqwest::Error> {
+        let (client, request_result) = self.build_split();
+        let request = request_result?;
+        Ok(RequestClient { request, client })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)]
     use crate::context::RespContext;
-    use crate::prelude::*;
     use crate::serialization_formats::JsonFormat;
+    use crate::{prelude::*, ToRequestClient};
     use crate::{ApiClient, JsonApiClient, ReceiveJson};
     use reqwest::{Method, StatusCode};
     use serde::Deserialize;
@@ -523,6 +534,20 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Expected status: 404 Not Found, got: 400 Bad Request"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_api__request_client() -> anyhow::Result<()> {
+        let req_builder = ExampleApi::default()
+            .get("/pet/findByStatus")
+            .query(&[("status", "available")]);
+        let req_client = ToRequestClient::try_into(req_builder)?;
+
+        req_client
+            .recv_json::<serde_json::Value, serde_json::Value>()
+            .await?;
 
         Ok(())
     }

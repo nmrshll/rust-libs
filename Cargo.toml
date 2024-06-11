@@ -1,12 +1,13 @@
 [workspace]
 members = [
-    "api-client-utils",
+    "api-client-utils", 
+    "typed-ids",
 ]
 resolver="2"
 
 [workspace.dependencies]
 # async, web, db
-tokio = { version="^1.36", features=["full"] }
+tokio = { version="^1.37", features=["full"] }
 reqwest = { version="^0.12", features=["json"] }
 # serde, crypto, codecs
 serde = { version="^1.0", features=["derive"] }
@@ -15,3 +16,5 @@ serde_json = "^1.0"
 anyhow = { version="^1.0", features=["backtrace"] }
 thiserror = "^1.0"
 lazy_static = "^1.4"
+# rust utils
+derive_more = "^1"

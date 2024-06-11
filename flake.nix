@@ -54,7 +54,8 @@
           };
 
           binaries = my-utils.binaries.${system};
-          scripts = attrValues my-utils.packages.${system} ++ [
+          scripts = with pkgs; attrValues my-utils.packages.${system} ++ [
+            (writeScriptBin "utest" ''cargo test --workspace -- --nocapture'')
             # (pkgs.writeScriptBin "back" ''cargo run'')
           ];
 
