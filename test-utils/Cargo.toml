@@ -1,0 +1,14 @@
+[package]
+name = "test-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# file-cache = { path="../file-cache" }
+anyhow.workspace = true
+regex.workspace = true
+# lazy_static.workspace = true
+# cardano-serialization-lib.workspace = true
+
+[dev-dependencies]
+# tokio.workspace = true
