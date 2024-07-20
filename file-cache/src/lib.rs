@@ -1,5 +1,4 @@
-use anyhow::anyhow;
-// use cardano_serialization_lib::crypto::PrivateKey;
+use std::convert::Infallible;
 use std::fs;
 use std::future::Future;
 use std::io::Read;
@@ -7,8 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 lazy_static::lazy_static! {
-  pub static ref WORK_DIR: Result<PathBuf, String> = work_dir();
-  pub static ref CACHE_DIR: Result<PathBuf, String> = cache_dir();
+  pub static ref GIT_WORK_DIR: Result<PathBuf, String> = GitRepoCacheDir::work_dir();
 }
 
 pub trait FileBytes: Sized {
@@ -27,79 +25,92 @@ pub trait FileBytes: Sized {
     }
 }
 
-pub trait FromFileOrNew: FileBytes {
-    fn from_file_or_save_new<Fut>(
+pub trait StaticCacheDir {
+    fn cache_dir() -> anyhow::Result<PathBuf>;
+    fn file_path(path_relative: &str) -> anyhow::Result<PathBuf> {
+        let cache_dir = Self::cache_dir()?;
+        Ok(cache_dir.join(path_relative))
+    }
+}
+pub struct GitRepoCacheDir {}
+impl GitRepoCacheDir {
+    pub fn work_dir() -> Result<PathBuf, String> {
+        let wd_bytes_utf8 = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .map_err(|e| e.to_string())?
+            .stdout;
+        let path_string = String::from_utf8_lossy(&wd_bytes_utf8).to_string();
+        Ok(PathBuf::from(&path_string.trim()))
+    }
+}
+impl StaticCacheDir for GitRepoCacheDir {
+    fn cache_dir() -> anyhow::Result<PathBuf> {
+        let work_dir = GIT_WORK_DIR.as_ref().map_err(anyhow::Error::msg)?;
+        let cache_dir = work_dir.join(".cache");
+        Ok(cache_dir)
+    }
+}
+
+pub trait FromFileOrNew<CacheDir>: FileBytes
+where
+    CacheDir: StaticCacheDir,
+{
+    fn from_file_or_save_new<Fut, E>(
         file_id: &str,
         make_new: Fut,
     ) -> impl Future<Output = anyhow::Result<Self>>
     where
-        Fut: std::future::Future<Output = anyhow::Result<Self>> + Send;
-
-    // this is separated into a function to avoid unclonable reference to lazy_static inside an async fn
-    fn file_path(file_id: &str) -> anyhow::Result<PathBuf> {
-        let cache_dir = CACHE_DIR.as_ref().map_err(|e| anyhow!(e))?;
-        Ok(cache_dir.join(file_id))
-    }
-}
-impl<T: FileBytes> FromFileOrNew for T {
-    async fn from_file_or_save_new<Fut>(file_id: &str, make_new: Fut) -> anyhow::Result<Self>
-    where
-        Fut: std::future::Future<Output = anyhow::Result<Self>> + Send,
+        Fut: std::future::Future<Output = Result<Self, E>> + Send,
+        E: std::error::Error + Send + Sync + 'static,
     {
-        let file_path = Self::file_path(file_id)?;
+        async {
+            let file_path = CacheDir::file_path(file_id)?;
 
-        // if file, load from file. else generate new and save to file
-        if Path::new(&file_path).exists() {
-            Self::from_file(&file_path)
-        } else {
-            let new = make_new.await?;
-            fs::write(file_path, new.as_file_bytes()?).expect("Unable to write file");
-            Ok(new)
+            // if file, load from file. else generate new and save to file
+            if Path::new(&file_path).exists() {
+                Self::from_file(&file_path)
+            } else {
+                let new = make_new.await.map_err(anyhow::Error::new)?;
+                fs::write(file_path, new.as_file_bytes()?).expect("Unable to write file");
+                Ok(new)
+            }
         }
     }
-}
 
-pub trait CachedOrDefault: FromFileOrNew + Default {
+    // // this is separated into a function to avoid unclonable reference to lazy_static inside an async fn
+    // fn file_path(file_id: &str) -> anyhow::Result<PathBuf> {
+    //     let cache_dir = CACHE_DIR.as_ref().map_err(|e| anyhow!(e))?;
+    //     Ok(cache_dir.join(file_id))
+    // }
+}
+// auto-implement FromFileOrNew for all FileBytes types
+impl<T: FileBytes> FromFileOrNew<GitRepoCacheDir> for T {}
+
+pub trait CachedOrDefault: FromFileOrNew<GitRepoCacheDir> + Default {
     fn cached_or_default(file_id: &str) -> impl Future<Output = anyhow::Result<Self>> {
-        Self::from_file_or_save_new(file_id, async { Ok(Self::default()) })
+        Self::from_file_or_save_new::<_, Infallible>(file_id, async { Ok(Self::default()) })
     }
 }
-impl<T: FromFileOrNew + Default> CachedOrDefault for T {} // auto-implement for all possible types
-
-pub fn work_dir() -> Result<PathBuf, String> {
-    let wd_bytes_utf8 = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|e| e.to_string())?
-        .stdout;
-    let path_string = String::from_utf8_lossy(&wd_bytes_utf8).to_string();
-    Ok(PathBuf::from(&path_string.trim()))
-}
-pub fn cache_dir() -> Result<PathBuf, String> {
-    let cache_dir: PathBuf = WORK_DIR.as_ref()?.join(".cache/test_data");
-    if !cache_dir.exists() {
-        fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
-    }
-    Ok(cache_dir)
-}
+impl<T: FromFileOrNew<GitRepoCacheDir> + Default> CachedOrDefault for T {} // auto-implement for all possible types
 
 pub mod implementations {
     use super::*;
 
-    // impl FileBytes for PrivateKey {
+    // impl FileBytes for cardano_serialization_lib::crypto::PrivateKey {
     //     fn as_file_bytes(&self) -> anyhow::Result<Vec<u8>> {
     //         Ok(self.to_bech32().as_bytes().to_vec())
     //     }
     //     fn from_file_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-    //         Ok(PrivateKey::from_bech32(&String::from_utf8(
+    //         Ok(Self::from_bech32(&String::from_utf8(
     //             bytes.to_vec(),
     //         )?)?)
     //     }
     // }
 
     impl FileBytes for () {
-        // this impl is for when we want to avoid redoing steps that don't have an output, like mint_and_distribute
-        // the file is simply a marker that the step has been done
+        // if we need to avoid repeating a step, but that step doesn't have an output,
+        // this file is simply a marker that the step has been done
         fn as_file_bytes(&self) -> anyhow::Result<Vec<u8>> {
             Ok(b"ok".to_vec())
         }
@@ -126,7 +137,7 @@ pub mod cache_counter {
         pub async fn next(file_id: &str) -> anyhow::Result<Self> {
             let mut counter = CacheCounter::cached_or_default(file_id).await?;
             counter.0 += 1;
-            counter.to_file(&Self::file_path(file_id)?)?;
+            counter.to_file(&GitRepoCacheDir::file_path(file_id)?)?;
             Ok(counter)
         }
     }
