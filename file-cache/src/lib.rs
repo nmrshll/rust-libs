@@ -32,14 +32,13 @@ pub trait FromFileOrNew<CacheDir>: FileBytes
 where
     CacheDir: StaticCacheDir,
 {
-    fn from_file_or_save_new<Fut, IntoE, E>(
+    fn from_file_or_save_new<Fut, E>(
         file_id: &str,
         make_new: Fut,
     ) -> impl Future<Output = anyhow::Result<Self>>
     where
-        Fut: std::future::Future<Output = Result<Self, IntoE>> + Send,
-        // IntoE: Into<E>,
-        E: std::error::Error + Send + Sync + 'static + From<IntoE>,
+        Fut: std::future::Future<Output = Result<Self, E>> + Send,
+        anyhow::Error: From<E>,
     {
         async {
             let file_path = CacheDir::file_path(file_id)?;
@@ -48,7 +47,7 @@ where
             if Path::new(&file_path).exists() {
                 Self::from_file(&file_path)
             } else {
-                let new = make_new.await.map_err(|e| anyhow::Error::new(E::from(e)))?;
+                let new = make_new.await.map_err(anyhow::Error::from)?;
                 fs::write(file_path, new.as_file_bytes()?).expect("Unable to write file");
                 Ok(new)
             }
@@ -66,9 +65,7 @@ impl<T: FileBytes> FromFileOrNew<GitRepoCacheDir> for T {}
 
 pub trait CachedOrDefault: FromFileOrNew<GitRepoCacheDir> + Default {
     fn cached_or_default(file_id: &str) -> impl Future<Output = anyhow::Result<Self>> {
-        Self::from_file_or_save_new::<_, Infallible, Infallible>(file_id, async {
-            Ok(Self::default())
-        })
+        Self::from_file_or_save_new::<_, Infallible>(file_id, async { Ok(Self::default()) })
     }
 }
 impl<T: FromFileOrNew<GitRepoCacheDir> + Default> CachedOrDefault for T {} // auto-implement for all possible types
