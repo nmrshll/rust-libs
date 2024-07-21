@@ -8,6 +8,9 @@ use std::process::Command;
 lazy_static::lazy_static! {
   pub static ref GIT_WORK_DIR: Result<PathBuf, String> = GitRepoCacheDir::work_dir();
 }
+pub mod prelude {
+    pub use crate::{FileBytes, FromFileOrNew};
+}
 
 pub trait FileBytes: Sized {
     fn as_file_bytes(&self) -> anyhow::Result<Vec<u8>>;
@@ -24,6 +27,51 @@ pub trait FileBytes: Sized {
         Ok(())
     }
 }
+
+pub trait FromFileOrNew<CacheDir>: FileBytes
+where
+    CacheDir: StaticCacheDir,
+{
+    fn from_file_or_save_new<Fut, IntoE, E>(
+        file_id: &str,
+        make_new: Fut,
+    ) -> impl Future<Output = anyhow::Result<Self>>
+    where
+        Fut: std::future::Future<Output = Result<Self, IntoE>> + Send,
+        // IntoE: Into<E>,
+        E: std::error::Error + Send + Sync + 'static + From<IntoE>,
+    {
+        async {
+            let file_path = CacheDir::file_path(file_id)?;
+
+            // if file, load from file. else generate new and save to file
+            if Path::new(&file_path).exists() {
+                Self::from_file(&file_path)
+            } else {
+                let new = make_new.await.map_err(|e| anyhow::Error::new(E::from(e)))?;
+                fs::write(file_path, new.as_file_bytes()?).expect("Unable to write file");
+                Ok(new)
+            }
+        }
+    }
+
+    // // this is separated into a function to avoid unclonable reference to lazy_static inside an async fn
+    // fn file_path(file_id: &str) -> anyhow::Result<PathBuf> {
+    //     let cache_dir = CACHE_DIR.as_ref().map_err(|e| anyhow!(e))?;
+    //     Ok(cache_dir.join(file_id))
+    // }
+}
+// auto-implement FromFileOrNew for all FileBytes types
+impl<T: FileBytes> FromFileOrNew<GitRepoCacheDir> for T {}
+
+pub trait CachedOrDefault: FromFileOrNew<GitRepoCacheDir> + Default {
+    fn cached_or_default(file_id: &str) -> impl Future<Output = anyhow::Result<Self>> {
+        Self::from_file_or_save_new::<_, Infallible, Infallible>(file_id, async {
+            Ok(Self::default())
+        })
+    }
+}
+impl<T: FromFileOrNew<GitRepoCacheDir> + Default> CachedOrDefault for T {} // auto-implement for all possible types
 
 pub trait StaticCacheDir {
     fn cache_dir() -> anyhow::Result<PathBuf>;
@@ -51,48 +99,6 @@ impl StaticCacheDir for GitRepoCacheDir {
         Ok(cache_dir)
     }
 }
-
-pub trait FromFileOrNew<CacheDir>: FileBytes
-where
-    CacheDir: StaticCacheDir,
-{
-    fn from_file_or_save_new<Fut, E>(
-        file_id: &str,
-        make_new: Fut,
-    ) -> impl Future<Output = anyhow::Result<Self>>
-    where
-        Fut: std::future::Future<Output = Result<Self, E>> + Send,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        async {
-            let file_path = CacheDir::file_path(file_id)?;
-
-            // if file, load from file. else generate new and save to file
-            if Path::new(&file_path).exists() {
-                Self::from_file(&file_path)
-            } else {
-                let new = make_new.await.map_err(anyhow::Error::new)?;
-                fs::write(file_path, new.as_file_bytes()?).expect("Unable to write file");
-                Ok(new)
-            }
-        }
-    }
-
-    // // this is separated into a function to avoid unclonable reference to lazy_static inside an async fn
-    // fn file_path(file_id: &str) -> anyhow::Result<PathBuf> {
-    //     let cache_dir = CACHE_DIR.as_ref().map_err(|e| anyhow!(e))?;
-    //     Ok(cache_dir.join(file_id))
-    // }
-}
-// auto-implement FromFileOrNew for all FileBytes types
-impl<T: FileBytes> FromFileOrNew<GitRepoCacheDir> for T {}
-
-pub trait CachedOrDefault: FromFileOrNew<GitRepoCacheDir> + Default {
-    fn cached_or_default(file_id: &str) -> impl Future<Output = anyhow::Result<Self>> {
-        Self::from_file_or_save_new::<_, Infallible>(file_id, async { Ok(Self::default()) })
-    }
-}
-impl<T: FromFileOrNew<GitRepoCacheDir> + Default> CachedOrDefault for T {} // auto-implement for all possible types
 
 pub mod implementations {
     use super::*;
