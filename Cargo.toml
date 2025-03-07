@@ -3,7 +3,7 @@ members = [
     "experimental/*",
     "api-client-utils", 
     "file-cache",
-    "test-utils",
+    "test-utils", "strings",
 ]
 resolver="2"
 
