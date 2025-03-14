@@ -48,6 +48,22 @@ impl Slug for String {
     }
 }
 
+fn human_fmt_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+
+    let mut value = bytes;
+    let mut unit_idx = 0;
+    // Shift right until we're below 1024^2 or reach end of units
+    while value >= (1024 * 1024) && unit_idx < UNITS.len() - 2 {
+        value >>= 10;
+        unit_idx += 1;
+    }
+    let value: f64 = value as f64 / 1024.0;
+    unit_idx += 1;
+
+    format!("{:.2} {}", value, UNITS[unit_idx])
+}
+
 #[cfg(test)]
 mod tests {
     use core::str;
