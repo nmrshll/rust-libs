@@ -48,7 +48,7 @@ impl Slug for String {
     }
 }
 
-fn human_fmt_bytes(bytes: u64) -> String {
+pub fn human_fmt_bytes(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
 
     let mut value = bytes;
@@ -66,8 +66,6 @@ fn human_fmt_bytes(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::str;
-
     use super::*;
 
     #[test]

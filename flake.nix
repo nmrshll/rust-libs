@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-24.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
     utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -26,24 +26,24 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
-        customRust = pkgs.rust-bin.stable."1.77.0".default.override {
+        customRust = pkgs.rust-bin.stable."1.87.0".default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
           targets = [ ];
         };
 
-        buildDependencies = with pkgs; [
+        buildDependencies = [
           customRust
-          nodePackages_latest.pnpm
-        ] ++ (
-          lib.optionals stdenv.isDarwin [
-            darwin.apple_sdk.frameworks.Security
-            darwin.apple_sdk.frameworks.SystemConfiguration
-            darwin.apple_sdk.frameworks.CoreServices
-            darwin.apple_sdk.frameworks.CoreFoundation
-            darwin.apple_sdk.frameworks.Foundation
-            libiconv
-          ]
-        );
+          pkgs.nodePackages_latest.pnpm
+          pkgs.pkg-config
+        ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+          # darwin.apple_sdk.frameworks.Security
+          # darwin.apple_sdk.frameworks.SystemConfiguration
+          # darwin.apple_sdk.frameworks.CoreServices
+          # darwin.apple_sdk.frameworks.CoreFoundation
+          # darwin.apple_sdk.frameworks.Foundation
+          pkgs.apple-sdk_15
+          pkgs.libiconv
+        ];
         devDependencies = [
           pkgs.cargo-edit
           pkgs.watchexec
@@ -64,7 +64,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = buildDependencies ++ devDependencies ++ scripts;
           shellHook = ''
-            ${binaries.configure-vscode}; 
+            ${my-utils.binaries.${system}.configure-editors};
             dotenv
           '';
           inherit env;
