@@ -156,15 +156,15 @@ impl RepoOrXdg {
 
 pub trait Cacheable: FileBytes {
     // if Path doesn't depend on &self, only override this one
-    fn static_relative_path_str() -> &'static str {
+    fn uniq_relative_path_str() -> &'static str {
         std::any::type_name::<Self>()
     }
-    fn static_relative_path() -> &'static Path {
-        &Path::new(Self::static_relative_path_str())
+    fn uniq_relative_path() -> &'static Path {
+        &Path::new(Self::uniq_relative_path_str())
     }
     // if Path depends on &self, override this one (only)
     fn relative_path_str(&self) -> String {
-        Self::static_relative_path().to_string_lossy().to_string()
+        Self::uniq_relative_path().to_string_lossy().to_string()
     }
     fn relative_path(&self) -> PathBuf {
         PathBuf::from(self.relative_path_str())
@@ -178,14 +178,53 @@ pub trait Cacheable: FileBytes {
         self.to_file(&file_path)?;
         Ok(file_path)
     }
-    fn from_cache(file_path: &Path) -> anyhow::Result<Self> {
-        let loaded = Self::from_file(&file_path)?;
+    fn from_cache(file_path: &Path) -> Result<Self, CacheableErr> {
+        let loaded =
+            Self::from_file(&file_path).map_err(|e| CacheableErr::FileLoadErr(e.to_string()))?;
         if loaded.is_expired() {
-            fs::remove_file(file_path).map_err(|e| anyhow::Error::new(e))?;
-            return Err(anyhow::Error::msg("Cache expired"));
+            fs::remove_file(file_path).map_err(|e| CacheableErr::FileDeleteErr(e.to_string()))?;
+            return Err(CacheableErr::CacheExpired);
         }
         return Ok(loaded);
     }
+    fn uniq_from_cache() -> Result<Self, CacheableErr> {
+        Self::from_cache(&Self::uniq_relative_path())
+    }
+
+    fn uniq_from_cache_or<FutC, Fut, Err>(
+        make_new: FutC,
+    ) -> impl Future<Output = Result<Self, CacheableErr>>
+    where
+        FutC: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Self, Err>>,
+        Err: std::fmt::Display,
+    {
+        async {
+            if let Ok(cached) = Self::uniq_from_cache() {
+                return Ok(cached);
+            }
+            let loaded = make_new()
+                .await
+                .map_err(|e| CacheableErr::NewInstanceErr(e.to_string()))?;
+            loaded
+                .to_cache()
+                .map_err(|e| CacheableErr::FileSaveErr(e.to_string()))?;
+            return Ok(loaded);
+        }
+    }
+}
+#[derive(thiserror::Error, Debug)]
+pub enum CacheableErr {
+    #[error("Cache expired")]
+    CacheExpired,
+    #[error("Err loading file: {0}")]
+    FileLoadErr(String),
+    #[error("Err deleting file: {0}")]
+    FileDeleteErr(String),
+    #[error("Err saving file: {0}")]
+    FileSaveErr(String),
+    #[error("Err creating new type instance: {0}")]
+    NewInstanceErr(String),
 }
 
 pub mod implementations {
