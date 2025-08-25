@@ -179,8 +179,10 @@ pub trait Cacheable: FileBytes {
         Ok(file_path)
     }
     fn from_cache(file_path: &Path) -> Result<Self, CacheableErr> {
-        let loaded =
-            Self::from_file(&file_path).map_err(|e| CacheableErr::FileLoadErr(e.to_string()))?;
+        let loaded = Self::from_file(&file_path).map_err(|e| CacheableErr::FileLoadErr {
+            source: e,
+            file_path: file_path.to_path_buf(),
+        })?;
         if loaded.is_expired() {
             fs::remove_file(file_path).map_err(|e| CacheableErr::FileDeleteErr(e.to_string()))?;
             return Err(CacheableErr::CacheExpired);
@@ -188,7 +190,13 @@ pub trait Cacheable: FileBytes {
         return Ok(loaded);
     }
     fn uniq_from_cache() -> Result<Self, CacheableErr> {
-        Self::from_cache(&Self::uniq_relative_path())
+        let file_path_abs = RepoOrXdg::file_path(&Self::uniq_relative_path_str()).map_err(|e| {
+            CacheableErr::FileLoadErr {
+                source: e,
+                file_path: Self::uniq_relative_path().to_path_buf(),
+            }
+        })?;
+        Self::from_cache(file_path_abs.as_path())
     }
 
     fn uniq_from_cache_or<FutC, Fut, Err>(
@@ -200,9 +208,15 @@ pub trait Cacheable: FileBytes {
         Err: std::fmt::Display,
     {
         async {
-            if let Ok(cached) = Self::uniq_from_cache() {
-                return Ok(cached);
+            match Self::uniq_from_cache() {
+                Ok(cached) => return Ok(cached),
+                Err(e) => {
+                    dbg!(&e);
+                }
             }
+            // if let Ok(cached) = Self::uniq_from_cache() {
+            //     return Ok(cached);
+            // }
             let loaded = make_new()
                 .await
                 .map_err(|e| CacheableErr::NewInstanceErr(e.to_string()))?;
@@ -217,8 +231,11 @@ pub trait Cacheable: FileBytes {
 pub enum CacheableErr {
     #[error("Cache expired")]
     CacheExpired,
-    #[error("Err loading file: {0}")]
-    FileLoadErr(String),
+    #[error("Err loading file {file_path}: {source}")]
+    FileLoadErr {
+        source: anyhow::Error,
+        file_path: PathBuf,
+    },
     #[error("Err deleting file: {0}")]
     FileDeleteErr(String),
     #[error("Err saving file: {0}")]
