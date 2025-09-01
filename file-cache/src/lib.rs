@@ -178,13 +178,20 @@ pub trait Cacheable: FileBytes {
         self.to_file(&file_path)?;
         Ok(file_path)
     }
-    fn from_cache(file_path: &Path) -> Result<Self, CacheableErr> {
+    fn from_cache(path_relative: &Path) -> Result<Self, CacheableErr> {
+        let file_path =
+            RepoOrXdg::file_path(&path_relative.as_os_str().to_string_lossy().to_string())
+                .map_err(|e| CacheableErr::FileLoadErr {
+                    source: e,
+                    file_path: path_relative.to_path_buf(),
+                })?;
         let loaded = Self::from_file(&file_path).map_err(|e| CacheableErr::FileLoadErr {
             source: e,
-            file_path: file_path.to_path_buf(),
+            file_path: path_relative.to_path_buf(),
         })?;
         if loaded.is_expired() {
-            fs::remove_file(file_path).map_err(|e| CacheableErr::FileDeleteErr(e.to_string()))?;
+            fs::remove_file(path_relative)
+                .map_err(|e| CacheableErr::FileDeleteErr(e.to_string()))?;
             return Err(CacheableErr::CacheExpired);
         }
         return Ok(loaded);
@@ -210,13 +217,8 @@ pub trait Cacheable: FileBytes {
         async {
             match Self::uniq_from_cache() {
                 Ok(cached) => return Ok(cached),
-                Err(e) => {
-                    dbg!(&e);
-                }
+                Err(_e) => {}
             }
-            // if let Ok(cached) = Self::uniq_from_cache() {
-            //     return Ok(cached);
-            // }
             let loaded = make_new()
                 .await
                 .map_err(|e| CacheableErr::NewInstanceErr(e.to_string()))?;
